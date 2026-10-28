@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Quét Mã Thẻ — Live</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: 'Inter', sans-serif; overflow: hidden; }
+
+    /* ── Camera override ───────────────────── */
+    #reader { width: 100% !important; height: 100% !important; border: none !important; }
+    #reader__scan_region { background: transparent !important; height: 100% !important; }
+    #reader__scan_region > img { display: none !important; }
+    #reader video {
+      width: 100% !important; height: 100% !important;
+      object-fit: cover !important; display: block;
+    }
+    #reader__dashboard_section { display: none !important; }
+    #reader__header_message     { display: none !important; }
+
+    /* ── Viewfinder ─────────────────────────── */
+    .vf {
+      position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; pointer-events: none; z-index: 10;
+    }
+    .vf-box { width: 58%; aspect-ratio: 1; position: relative; }
+    .vf-box::before, .vf-box::after, .vf-bl, .vf-br {
+      content: ''; position: absolute; width: 22px; height: 22px;
+      border-color: #22d3ee; border-style: solid;
+    }
+    .vf-box::before { top: 0; left: 0;   border-width: 3px 0 0 3px; border-radius: 5px 0 0 0; }
+    .vf-box::after  { top: 0; right: 0;  border-width: 3px 3px 0 0; border-radius: 0 5px 0 0; }
+    .vf-bl { bottom: 0; left: 0;         border-width: 0 0 3px 3px; border-radius: 0 0 0 5px; }
+    .vf-br { bottom: 0; right: 0;        border-width: 0 3px 3px 0; border-radius: 0 0 5px 0; }
+
+    /* scan laser line */
+    .scan-laser {
+      position: absolute; left: 4%; right: 4%; height: 2px;
+      background: linear-gradient(90deg, transparent, #22d3ee, transparent);
+      box-shadow: 0 0 8px #22d3ee, 0 0 16px rgba(34,211,238,.4);
+      border-radius: 2px;
+      animation: laserAnim 2s ease-in-out infinite;
+    }
+    @keyframes laserAnim {
+      0%   { top: 6%;  opacity: .6; }
+      50%  { top: 88%; opacity: 1;  }
+      100% { top: 6%;  opacity: .6; }
+    }
+
+    /* scan success flash */
+    #scan-flash {
+      position: absolute; inset: 0; pointer-events: none; z-index: 20;
+      background: rgba(34, 211, 238, 0.18); opacity: 0;
+      transition: opacity .1s;
+    }
+    #scan-flash.flash { opacity: 1; }
+
+    /* ── Barcode display pop ───────────────── */
+    @keyframes codePop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.04); }
+      100% { transform: scale(1); }
+    }
+    .code-pop { animation: codePop .25s ease; }
+
+    /* ── Custom toggle ──────────────────────── */
+    .toggle-track { position: relative; width: 36px; height: 20px; border-radius: 10px;
+                    transition: background .2s; cursor: pointer; }
+    .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                    border-radius: 50%; transition: transform .2s, background .2s; }
+
+    /* ── Countdown bar ──────────────────────── */
+    #countdown-fill {
+      height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, #0e7490, #06b6d4);
+      transition: width linear;
+    }
+
+    /* ── Input ──────────────────────────────── */
+    .ifield {
+      width: 100%; padding: .65rem 1rem; border-radius: .75rem; font-size: .875rem;
+      background: rgba(255,255,255,.06); border: 1.5px solid rgba(34,211,238,.18);
+      color: #e2e8f0; outline: none; transition: border-color .2s, box-shadow .2s;
+    }
+    .ifield:focus { border-color: #22d3ee; box-shadow: 0 0 0 3px rgba(34,211,238,.18); }
+
+    /* ── Scroll ─────────────────────────────── */
+    #form-area { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    #form-area::-webkit-scrollbar { width: 3px; }
+    #form-area::-webkit-scrollbar-thumb { background: rgba(34,211,238,.2); border-radius: 4px; }
+
+    /* ── Toast ──────────────────────────────── */
+    #toast { transition: opacity .35s ease, transform .35s ease; }
+    #toast.hide { opacity: 0; transform: translateY(14px); pointer-events: none; }
+    #toast.show  { opacity: 1; transform: translateY(0);   pointer-events: auto; }
+
+    .btn-press:active { transform: scale(.97); }
+
+    /* ── Details / summary arrow ────────────── */
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary .arr { transition: transform .2s; }
+    details[open] > summary .arr { transform: rotate(90deg); }
+  </style>
+</head>
+
+<body class="flex flex-col" style="background:#08152e; color:#e2e8f0; height:100dvh;">
+
+  <!-- ════════════════════════════════════════════════
+       HEADER
+  ════════════════════════════════════════════════ -->
+  <header class="flex-shrink-0 flex items-center gap-3 px-4 py-3"
+          style="background:#0f2144; border-bottom:1px solid rgba(34,211,238,.12);">
+    <!-- Logo -->
+    <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+         style="background:linear-gradient(135deg,#0c1a33,#06b6d4);">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-white" fill="none"
+           viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+        <rect x="3" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="3" y="14" width="7" height="7" rx="1.2"/>
+        <path stroke-linecap="round" d="M14 14h2m3 0h2M14 17v2m0 3v-1M17 14v3h3"/>
+      </svg>
+    </div>
+    <div class="flex-1 min-w-0">
+      <h1 class="text-sm font-semibold text-white leading-none">Quét Mã Thẻ</h1>
+      <p class="text-xs text-gray-500 mt-0.5 truncate">Live Barcode &amp; QR Scanner</p>
+    </div>
+    <!-- Camera live badge -->
+    <div id="cam-badge"
+         class="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium"
+         style="background:rgba(234,179,8,.1);color:#fbbf24;border:1px solid rgba(234,179,8,.25);">
+      <span class="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse inline-block"></span>
+      Khởi động
+    </div>
+  </header>
+
+  <!-- ════════════════════════════════════════════════
+       CAMERA VIEWPORT  (flex-shrink-0, fixed height)
+  ════════════════════════════════════════════════ -->
+  <div id="cam-wrap" class="flex-shrink-0 relative overflow-hidden"
+       style="height:42vh; background:#000;">
+
+    <!-- html5-qrcode mounts here -->
+    <div id="reader" style="height:100%;"></div>
+
+    <!-- Viewfinder overlay -->
+    <div class="vf">
+      <div class="vf-box">
+        <div class="vf-bl"></div>
+        <div class="vf-br"></div>
+        <div class="scan-laser"></div>
+      </div>
+    </div>
+
+    <!-- Success flash -->
+    <div id="scan-flash"></div>
+
+    <!-- Bottom hint -->
+    <div class="absolute bottom-0 left-0 right-0 px-4 py-2 text-center text-xs text-gray-400"
+         style="background:linear-gradient(transparent,rgba(0,0,0,.55));">
+      Hướng camera vào mã vạch / QR code
+    </div>
+
+    <!-- Init overlay (spinner) -->
+    <div id="cam-init" class="absolute inset-0 flex flex-col items-center justify-center gap-3"
+         style="background:#000; z-index:30;">
+      <svg class="w-9 h-9 animate-spin" style="color:#22d3ee"
+           xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      <p class="text-xs text-gray-400" id="cam-init-msg">Đang khởi động camera…</p>
+      <!-- Retry button (hidden initially) -->
+      <button id="btn-retry" onclick="startCamera()" class="hidden btn-press px-4 py-2 rounded-lg
+              text-xs font-semibold" style="background:#0e7490;color:#fff;">
+        Thử lại
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════
+       FORM AREA  (scrollable, flex-1)
+  ════════════════════════════════════════════════ -->
+  <div id="form-area" class="flex-1 px-4 py-3 space-y-3">
+
+    <!-- ── Barcode result row ──────────────────── -->
+    <div class="flex items-center gap-3 rounded-xl px-4 py-3"
+         style="background:#0f2144; border:1.5px solid rgba(34,211,238,.2);">
+      <!-- barcode icon -->
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0" style="color:rgba(34,211,238,.5)"
+           fill="currentColor" viewBox="0 0 24 24">
+        <rect x="1"  y="4" width="2"  height="16" rx=".5"/>
+        <rect x="5"  y="4" width="1"  height="16" rx=".5"/>
+        <rect x="8"  y="4" width="3"  height="16" rx=".5"/>
+        <rect x="13" y="4" width="1"  height="16" rx=".5"/>
+        <rect x="16" y="4" width="2"  height="16" rx=".5"/>
+        <rect x="20" y="4" width="1"  height="16" rx=".5"/>
+      </svg>
+      <span id="code-display" class="flex-1 text-sm font-mono truncate"
+            style="color:#4b5563;">Chờ quét…</span>
+      <!-- Count badge -->
+      <span id="scan-count-badge" class="hidden flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-semibold"
+            style="background:rgba(34,211,238,.15);color:#22d3ee;">#0</span>
+      <!-- Clear -->
+      <button id="btn-clr-code" onclick="clearCode()" class="hidden flex-shrink-0 text-gray-500
+              hover:text-red-400 transition-colors" title="Xoá mã">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none"
+             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- ── Auto-save row ────────────────────────── -->
+    <div class="flex items-center gap-3">
+      <!-- Toggle -->
+      <label class="flex items-center gap-2 cursor-pointer select-none"
+             onclick="toggleAutoSave()">
+        <div id="tog-track" class="toggle-track"
+             style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);">
+          <div id="tog-thumb" class="toggle-thumb" style="background:#475569;"></div>
+        </div>
+        <span class="text-xs text-gray-400">Tự động lưu</span>
+      </label>
+      <!-- Countdown bar -->
+      <div id="cdown-wrap" class="hidden flex-1 flex items-center gap-2">
+        <div class="flex-1 rounded-full overflow-hidden" style="height:5px;background:rgba(255,255,255,.08);">
+          <div id="countdown-fill" style="width:100%;height:100%;"></div>
+        </div>
+        <button onclick="cancelAutoSave()"
+                class="text-xs text-gray-500 hover:text-red-400 transition-colors leading-none">
+          Huỷ
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Optional fields (collapsible) ─────────── -->
+    <details id="opt-details">
+      <summary class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer
+                       hover:text-cyan-400 transition-colors select-none py-0.5">
+        <svg class="arr w-3 h-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none"
+             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+        </svg>
+        Thêm Tên / Số điện thoại
+      </summary>
+      <div class="mt-2 space-y-2">
+        <input id="input-name"  type="text" autocomplete="off" placeholder="Tên khách hàng" class="ifield" />
+        <input id="input-phone" type="tel"  autocomplete="off" placeholder="Số điện thoại"  class="ifield" />
+      </div>
+    </details>
+
+    <!-- ── Save button ──────────────────────────── -->
+    <button id="btn-save" onclick="saveRecord()"
+            class="btn-press w-full rounded-xl text-sm font-semibold
+                   flex items-center justify-center gap-2 transition-all duration-200"
+            style="padding:.9rem; background:linear-gradient(135deg,#0e7490,#06b6d4);
+                   color:#fff; box-shadow:0 4px 18px rgba(6,182,212,.35);">
+      <svg id="save-ico" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none"
+           viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0
+                 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+      </svg>
+      <svg id="save-spin" class="hidden w-5 h-5 animate-spin"
+           xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      <span id="save-lbl">Lưu Dữ Liệu</span>
+    </button>
+
+    <!-- ── Log ──────────────────────────────────── -->
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-xs font-medium text-gray-400">
+          Đã lưu hôm nay:
+          <span id="log-count" class="font-semibold" style="color:#22d3ee;">0</span>
+          bản ghi
+        </p>
+        <button onclick="clearLog()" class="text-xs text-gray-600 hover:text-red-400 transition-colors">
+          Xoá log
+        </button>
+      </div>
+      <ul id="log-list" class="space-y-1.5"></ul>
+    </div>
+
+    <!-- bottom padding -->
+    <div class="h-3"></div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════
+       TOAST
+  ════════════════════════════════════════════════ -->
+  <div id="toast" class="hide fixed bottom-5 left-1/2 -translate-x-1/2 z-50
+                          px-4 py-2.5 rounded-xl text-sm font-medium shadow-2xl
+                          flex items-center gap-2"
+       style="min-width:200px; max-width:88vw;" role="alert" aria-live="polite">
+    <span id="t-ico"></span>
+    <span id="t-msg"></span>
+  </div>
+
+  <!-- ════════════════════════════════════════════════
+       JAVASCRIPT
+  ════════════════════════════════════════════════ -->
+  <script>
+  /* ────────────────────────────────────────────────
+     CONFIG — URL deployment GAS của bạn
+  ──────────────────────────────────────────────── */
+  const GAS_API          = 'https://script.google.com/macros/s/AKfycbyEpHpOQoEm-bl-D8H7xjpQWwm8N7V1SqFJfFOrzG8x-K1WhNOuY-j-Zxcw3jqPk54K/exec';
+  const AUTO_SAVE_MS     = 2000;   // delay trước khi tự động lưu (ms)
+  const SCAN_COOLDOWN_MS = 3500;   // bỏ qua cùng 1 mã trong vòng X ms
+
+  /* ── State ─────────────────────────────────── */
+  let scanner       = null;
+  let currentCode   = '';
+  let autoSaveOn    = false;
+  let autoSaveTimer = null;
+  let scanLog       = [];
+  let totalSaved    = 0;
+  let _lastCode     = '';
+  let _lastCodeTs   = 0;
+
+  /* ── Auto-start on load ────────────────────── */
+  window.addEventListener('load', startCamera);
+
+  /* ══════════════════════════════════════════════
+     CAMERA
+  ══════════════════════════════════════════════ */
+  async function startCamera() {
+    // Reset init overlay
+    const initEl = document.getElementById('cam-init');
+    const msgEl  = document.getElementById('cam-init-msg');
+    const btnEl  = document.getElementById('btn-retry');
+    initEl.style.display = 'flex';
+    initEl.style.background = '#000';
+    msgEl.textContent = 'Đang khởi động camera…';
+    btnEl.classList.add('hidden');
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showCamError('Trình duyệt không hỗ trợ camera. Hãy dùng Chrome/Safari trên HTTPS.');
+      return;
+    }
+
+    // ── Step 1: native getUserMedia để kích permission dialog + lấy deviceId ──
+    let deviceId = null;
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }
+      });
+      deviceId = s.getVideoTracks()[0]?.getSettings()?.deviceId || null;
+      s.getTracks().forEach(t => t.stop());
+    } catch (e) {
+      if (e.name === 'NotAllowedError') {
+        showCamError('⚠️ Quyền camera bị từ chối.\nNhấn 🔒 → Cho phép Camera → Tải lại trang.');
+        return;
+      }
+      // OverconstrainedError (không có rear cam) → thử any cam
+      try {
+        const s2 = await navigator.mediaDevices.getUserMedia({ video: true });
+        deviceId = s2.getVideoTracks()[0]?.getSettings()?.deviceId || null;
+        s2.getTracks().forEach(t => t.stop());
+      } catch (e2) {
+        showCamError('Không thể truy cập camera: ' + (e2.message || e2.name));
+        return;
+      }
+    }
+
+    // ── Step 2: khởi động html5-qrcode ──────────────────────────────────────
+    try {
+      // Stop previous scanner if any
+      if (scanner) { try { await scanner.stop(); } catch (_) {} scanner = null; }
+
+      scanner = new Html5Qrcode('reader', { verbose: false });
+
+      const cfg = {
+        fps         : 15,
+        qrbox       : (w, h) => {
+          const s = Math.floor(Math.min(w, h) * 0.62);
+          return { width: s, height: s };
+        },
+        disableFlip : false,
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.DATA_MATRIX,
+          Html5QrcodeSupportedFormats.PDF_417,
+          Html5QrcodeSupportedFormats.ITF,
+        ]
+      };
+
+      await scanner.start(
+        deviceId || { facingMode: { ideal: 'environment' } },
+        cfg,
+        onScanSuccess,
+        () => {} // suppress frame errors
+      );
+
+      // Camera OK — hide init overlay
+      initEl.style.display = 'none';
+      setCamBadge('live');
+
+    } catch (err) {
+      showCamError('Lỗi khởi động scanner: ' + (err.message || err.name));
+    }
+  }
+
+  function showCamError(msg) {
+    const initEl = document.getElementById('cam-init');
+    const msgEl  = document.getElementById('cam-init-msg');
+    const btnEl  = document.getElementById('btn-retry');
+    initEl.style.display  = 'flex';
+    initEl.style.background = 'rgba(0,0,0,.92)';
+    msgEl.textContent = msg;
+    msgEl.style.color = '#fca5a5';
+    btnEl.classList.remove('hidden');
+    setCamBadge('error');
+  }
+
+  function setCamBadge(state) {
+    const b = document.getElementById('cam-badge');
+    const map = {
+      live    : ['rgba(74,222,128,.12)', '#4ade80', 'rgba(74,222,128,.3)',
+                 'bg-green-400', '🟢 Live'],
+      scanning: ['rgba(34,211,238,.12)', '#22d3ee', 'rgba(34,211,238,.3)',
+                 'bg-cyan-400',  '📡 Quét'],
+      error   : ['rgba(248,113,113,.12)', '#f87171','rgba(248,113,113,.3)',
+                 'bg-red-400',   '⛔ Lỗi'],
+    };
+    const [bg, color, border, dot, label] = map[state] || map.live;
+    b.style.cssText = `background:${bg};color:${color};border:1px solid ${border};`;
+    b.innerHTML = `<span class="w-1.5 h-1.5 rounded-full inline-block ${dot} animate-pulse"></span> ${label}`;
+  }
+
+  /* ══════════════════════════════════════════════
+     SCAN CALLBACK  (camera luôn chạy, không dừng)
+  ══════════════════════════════════════════════ */
+  function onScanSuccess(decodedText) {
+    const now = Date.now();
+    // Cooldown: bỏ qua cùng 1 mã quét liên tiếp
+    if (decodedText === _lastCode && now - _lastCodeTs < SCAN_COOLDOWN_MS) return;
+
+    _lastCode  = decodedText;
+    _lastCodeTs = now;
+
+    beep();
+    flashScreen();
+    fillCode(decodedText);
+    setCamBadge('scanning');
+
+    if (autoSaveOn) startAutoSave();
+  }
+
+  /* ══════════════════════════════════════════════
+     CODE DISPLAY
+  ══════════════════════════════════════════════ */
+  function fillCode(code) {
+    currentCode = code;
+    const el = document.getElementById('code-display');
+    el.textContent = code;
+    el.style.color = '#22d3ee';
+    el.classList.remove('code-pop');
+    void el.offsetWidth; // reflow
+    el.classList.add('code-pop');
+    document.getElementById('btn-clr-code').classList.remove('hidden');
+
+    // Update scan count badge
+    const badge = document.getElementById('scan-count-badge');
+    badge.classList.remove('hidden');
+  }
+
+  function clearCode() {
+    currentCode = '';
+    _lastCode   = '';
+    cancelAutoSave();
+    const el = document.getElementById('code-display');
+    el.textContent = 'Chờ quét…';
+    el.style.color = '#4b5563';
+    document.getElementById('btn-clr-code').classList.add('hidden');
+    document.getElementById('scan-count-badge').classList.add('hidden');
+    setCamBadge('live');
+  }
+
+  /* ══════════════════════════════════════════════
+     AUTO-SAVE TOGGLE + COUNTDOWN
+  ══════════════════════════════════════════════ */
+  function toggleAutoSave() {
+    autoSaveOn = !autoSaveOn;
+    const track = document.getElementById('tog-track');
+    const thumb = document.getElementById('tog-thumb');
+    if (autoSaveOn) {
+      track.style.background   = '#0e7490';
+      track.style.borderColor  = '#06b6d4';
+      thumb.style.transform    = 'translateX(16px)';
+      thumb.style.background   = '#22d3ee';
+    } else {
+      track.style.background   = 'rgba(255,255,255,.1)';
+      track.style.borderColor  = 'rgba(255,255,255,.15)';
+      thumb.style.transform    = 'translateX(0)';
+      thumb.style.background   = '#475569';
+      cancelAutoSave();
+    }
+  }
+
+  function startAutoSave() {
+    cancelAutoSave();
+    const wrap = document.getElementById('cdown-wrap');
+    const fill = document.getElementById('countdown-fill');
+    wrap.classList.remove('hidden');
+    // Animate bar from 100% → 0%
+    fill.style.transition = 'none';
+    fill.style.width = '100%';
+    fill.offsetWidth; // reflow
+    fill.style.transition = `width ${AUTO_SAVE_MS}ms linear`;
+    fill.style.width = '0%';
+    autoSaveTimer = setTimeout(() => {
+      wrap.classList.add('hidden');
+      saveRecord();
+    }, AUTO_SAVE_MS);
+  }
+
+  function cancelAutoSave() {
+    if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
+    document.getElementById('cdown-wrap').classList.add('hidden');
+  }
+
+  /* ══════════════════════════════════════════════
+     SAVE → GAS API via fetch()
+  ══════════════════════════════════════════════ */
+  async function saveRecord() {
+    cancelAutoSave();
+    if (!currentCode) {
+      showToast('Chưa có mã — hướng camera vào barcode!', 'error');
+      return;
+    }
+
+    const name  = document.getElementById('input-name').value.trim();
+    const phone = document.getElementById('input-phone').value.trim();
+
+    setSaving(true);
+
+    try {
+      // GET with URL params = simple CORS request, no preflight needed
+      const params = new URLSearchParams({ action: 'save', barcode: currentCode, name, phone });
+      const res    = await fetch(`${GAS_API}?${params}`, { redirect: 'follow' });
+      const data   = await res.json();
+
+      if (data && data.success) {
+        totalSaved++;
+        showToast(`✓ ${data.message || 'Lưu thành công!'}`, 'success');
+        addLog(currentCode, name, phone, data.row);
+        clearCode();           // clear barcode → camera tiếp tục quét
+        // Giữ nguyên name/phone cho các lần quét tiếp theo
+      } else {
+        showToast((data && data.message) || 'Lỗi không xác định.', 'error');
+      }
+    } catch (err) {
+      console.error('Save error:', err);
+      showToast('Lỗi kết nối GAS: ' + (err.message || 'Network error'), 'error');
+    }
+
+    setSaving(false);
+  }
+
+  function setSaving(on) {
+    const btn = document.getElementById('btn-save');
+    btn.disabled = on;
+    btn.style.opacity = on ? '.65' : '1';
+    document.getElementById('save-ico').classList.toggle('hidden', on);
+    document.getElementById('save-spin').classList.toggle('hidden', !on);
+    document.getElementById('save-lbl').textContent = on ? 'Đang lưu…' : 'Lưu Dữ Liệu';
+  }
+
+  /* ══════════════════════════════════════════════
+     EFFECTS
+  ══════════════════════════════════════════════ */
+  function beep() {
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = 'square'; o.frequency.value = 1200;
+      g.gain.setValueAtTime(.12, ac.currentTime);
+      g.gain.exponentialRampToValueAtTime(.001, ac.currentTime + .18);
+      o.start(ac.currentTime); o.stop(ac.currentTime + .18);
+    } catch (_) {}
+  }
+
+  function flashScreen() {
+    const el = document.getElementById('scan-flash');
+    el.classList.remove('flash');
+    el.offsetWidth;
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 350);
+  }
+
+  /* ══════════════════════════════════════════════
+     LOG
+  ══════════════════════════════════════════════ */
+  function addLog(barcode, name, phone, row) {
+    const t = new Date().toLocaleTimeString('vi-VN', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    scanLog.unshift({ barcode, name, phone, t, row });
+    if (scanLog.length > 50) scanLog.pop();
+    document.getElementById('log-count').textContent = scanLog.length;
+    renderLog();
+  }
+
+  function renderLog() {
+    document.getElementById('log-list').innerHTML =
+      scanLog.slice(0, 12).map((x, i) => `
+        <li class="flex items-center gap-2.5 px-3 py-2 rounded-lg"
+            style="background:rgba(255,255,255,.03);border:1px solid rgba(34,211,238,.07);">
+          <span class="w-5 h-5 flex-shrink-0 rounded-full flex items-center justify-center
+                       text-xs font-bold"
+                style="background:rgba(6,182,212,.15);color:#22d3ee;">
+            ${scanLog.length - i}
+          </span>
+          <span class="flex-1 text-xs font-mono truncate" style="color:#22d3ee;">
+            ${esc(x.barcode)}
+          </span>
+          ${x.name ? `<span class="text-xs text-gray-500 truncate max-w-24">${esc(x.name)}</span>` : ''}
+          <span class="flex-shrink-0 text-xs text-gray-600">${x.t}</span>
+        </li>`).join('');
+  }
+
+  function clearLog() {
+    scanLog = [];
+    document.getElementById('log-count').textContent = '0';
+    document.getElementById('log-list').innerHTML = '';
+  }
+
+  /* ══════════════════════════════════════════════
+     TOAST
+  ══════════════════════════════════════════════ */
+  let _toastTm;
+  function showToast(msg, type = 'info') {
+    const t = document.getElementById('toast');
+    const styles = {
+      success: ['linear-gradient(135deg,#052e16,#064e3b)', '#6ee7b7',
+                'rgba(52,211,153,.3)',
+                `<svg class="w-4 h-4 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`],
+      error  : ['linear-gradient(135deg,#3b0000,#7f1d1d)', '#fca5a5',
+                'rgba(248,113,113,.3)',
+                `<svg class="w-4 h-4 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>`],
+      info   : ['linear-gradient(135deg,#0c1a3b,#1e3a8a)', '#93c5fd',
+                'rgba(147,197,253,.25)',
+                `<svg class="w-4 h-4 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 20a8 8 0 100-16 8 8 0 000 16z"/></svg>`],
+    };
+    const [bg, color, border, ico] = styles[type] || styles.info;
+    t.style.cssText = `background:${bg};color:${color};border:1px solid ${border};min-width:200px;max-width:88vw;`;
+    document.getElementById('t-ico').innerHTML = ico;
+    document.getElementById('t-msg').textContent = msg;
+    t.classList.replace('hide', 'show');
+    clearTimeout(_toastTm);
+    _toastTm = setTimeout(() => t.classList.replace('show', 'hide'), 3500);
+  }
+
+  /* ── Utils ──────────────────────────────────── */
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  /* ── Keyboard: Enter to save ─────────────────── */
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && ['input-name','input-phone'].includes(document.activeElement?.id)) {
+      saveRecord();
+    }
+  });
+
+  /* ── Keep screen awake (if API supported) ────── */
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (_) {}
+  }
+  requestWakeLock();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') requestWakeLock();
+  });
+  </script>
+</body>
+</html>
